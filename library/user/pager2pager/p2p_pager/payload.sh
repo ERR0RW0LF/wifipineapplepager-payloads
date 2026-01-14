@@ -1,0 +1,167 @@
+#!/bin/bash
+# Title: Manege P2P Pager Service
+# Description: This script installs the AP Pager service.
+# Author: ERR0RW0LF
+# Inspiration: Darren Kitchen
+
+# Important locations for services
+SERVICE_LOCATION="/etc/init.d/p2p_pager"
+BIN_LOCATION="/usr/bin/p2p_pager"
+
+
+P2P_CONFIG_DIR="$HOME/.p2p_pager"
+
+
+start_pager_service() {
+    # Start the pager service in the background
+    /etc/init.d/p2p_pager start &
+    LOG "P2P Pager service started."
+}
+
+enable_pager_service() {
+    # Enable the pager service to start on boot
+    /etc/init.d/p2p_pager enable &
+    LOG "P2P Pager service enabled to start on boot."
+}
+
+
+configure_networks() {
+    # Configure necessary network settings
+    LOG "Configuring network settings for P2P Pager..."
+    # Add any necessary network configuration commands here
+}
+
+restart_pager_service() {
+    LOG "Restarting P2P Pager service..."
+    stop_pager_service
+    start_pager_service
+    LOG "P2P Pager service restarted."
+}
+
+stop_pager_service() {
+    LOG "Stopping P2P Pager service..."
+    /etc/init.d/p2p_pager stop
+    LOG "P2P Pager service stopped."
+}
+
+disable_pager_service() {
+    LOG "Disabling P2P Pager service from starting on boot..."
+    /etc/init.d/p2p_pager disable
+    LOG "P2P Pager service disabled from starting on boot."
+}
+
+
+
+install_pager_service() {
+    LOG "Installing P2P Pager service..."
+
+
+    LOG "Copying service files..."
+    cp init_p2p_pager "$SERVICE_LOCATION"
+    chmod +x "$SERVICE_LOCATION"
+    LOG GREEN "Service file copied to $SERVICE_LOCATION."
+
+    # Add Network file if needed
+    # cp network_file_location /etc/config/networks
+    mkdir -p "$P2P_CONFIG_DIR"
+    touch "$P2P_CONFIG_DIR/networks.conf"
+    touch "$P2P_CONFIG_DIR/pager.conf"
+
+    echo """
+    decay_time=300
+    beacon_interval=102
+    beacon_uptime=10
+    ssid_prefix=P2PAGER
+    channel=6
+    max_message_length=50
+    message_prefix=MSG:
+    decay_prefix=DECAY:
+    """ > "$P2P_CONFIG_DIR/pager.conf"
+
+
+    # Default network
+    #echo """
+    #open_net_aifouhjnuqi2r89hnugd
+    #""" > "$P2P_CONFIG_DIR/networks.conf"
+
+
+    start_pager_service
+    enable_pager_service
+    configure_networks
+    LOG "P2P Pager service installation complete."
+}
+
+uninstall_pager_service() {
+    LOG "Uninstalling P2P Pager service..."
+    # Stop the pager service
+    stop_pager_service
+
+    # Remove from startup
+    disable_pager_service
+
+    # Remove service file
+    rm -f "$SERVICE_LOCATION"
+
+
+    # Add any additional cleanup commands here
+    LOG "P2P Pager service uninstallation complete."
+}
+
+
+# Menu
+LOG "===== P2P Pager Service Management ====="
+LOG
+LOG "U) Install / Uninstall P2P Pager Service"
+LOG "D) Start / Stop P2P Pager Service"
+LOG "R) Restart P2P Pager Service"
+LOG "L) Exit"
+LOG
+LOG
+choice=$(WAIT_FOR_INPUT)
+
+case $choice in
+    UP)
+        LOG "You chose to Install / Uninstall P2P Pager Service."
+        LOG "U) Install P2P Pager Service"
+        LOG "D) Uninstall P2P Pager Service"
+        sub_choice=$(WAIT_FOR_INPUT)
+        case $sub_choice in
+            UP)
+                install_pager_service
+                ;;
+            DOWN)
+                uninstall_pager_service
+                ;;
+            *)
+                LOG "Invalid choice. Exiting."
+                ;;
+        esac
+        ;;
+    DOWN)
+        LOG "You chose to Start / Stop P2P Pager Service."
+        LOG "U) Start P2P Pager Service"
+        LOG "D) Stop P2P Pager Service"
+        sub_choice=$(WAIT_FOR_INPUT)
+        case $sub_choice in
+            UP)
+                start_pager_service
+                ;;
+            DOWN)
+                stop_pager_service
+                ;;
+            *)
+                LOG "Invalid choice. Exiting."
+                ;;
+        esac
+        ;;
+    RIGHT)
+        restart_pager_service
+        ;;
+    LEFT)
+        LOG "Exiting P2P Pager Service Management."
+        exit 0
+        ;;
+    *)
+        LOG "Invalid choice. Exiting."
+        ;;
+esac
