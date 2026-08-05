@@ -644,7 +644,7 @@ async def broadcast_message(interface, message_prefix, channel, interval, uptime
 # Send alert command to system
 async def send_alert(message):
     # Uses the "ALERT" command to send a message to the system (e.g., for Pineapple Pager)
-    os.system(f"ALERT '{message}'")
+    await asyncio.subprocess.create_subprocess_shell(f"ALERT '{message}'")
 
 
 
