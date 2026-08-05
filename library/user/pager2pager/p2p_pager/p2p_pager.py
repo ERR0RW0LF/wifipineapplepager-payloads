@@ -113,13 +113,31 @@ def load_networks():
                 networks[ssid] = overrides
     return networks
 
+
+def open_receiver(interface, available_ifaces) -> socket.socket:
+    """Open a raw monitor-mode socket for a single interface."""
+    proto = socket.ntohs(0x0003)
+    sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, proto)
+    try:
+        sock.bind((interface, 0))
+    except Exception as e:
+        print(f"[ERROR] Failed to bind raw socket to interface '{interface}': {e}")
+        if available_ifaces:
+            print(f"[ERROR] '{interface}' not in available interfaces. Choose one of: {available_ifaces}")
+        raise
+
+    sock.setblocking(0)
+    print(f"[DEBUG] Raw socket created (AF_PACKET, SOCK_RAW, proto=0x0003) and bound to {interface}")
+    return sock
+
 # Constants
 BEACON_INTERVAL = 0.102  # seconds between beacons
 REBROADCAST_DURATION = 10  # seconds to rebroadcast messages after starting
 DECAY_TIME = 300  # seconds before a message is considered "new" again
 VENDOR_IE_TAG = 221  # Vendor Specific IE tag
 MAX_MESSAGE_LENGTH = 200  # Max length of message to send
-INTERFACE = "wlan1mon"  # Monitor mode interface
+INTERFACES = ["wlan0mon", "wlan1mon"]  # Monitor mode interface
+PRIMARY_INTERFACE = INTERFACES[1] # Using wlan1mon as our primary interface because wlan0mon doesn't allow for package injection
 SSID_PREFIX = "P2PAGER"  # SSID prefix for networks
 
 DEST_ADDR = b'\xff\xff\xff\xff\xff\xff'  # Broadcast address
@@ -336,7 +354,7 @@ async def receive_messages(sock, decay_time, message_prefix, decay_prefix):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2**21)  # 2MB buffer
     except Exception as e:
         #print(f"[DEBUG] Failed to set socket buffer size: {e}")
-        pass
+        exit(1)
 
     # Use asyncio event loop for non-blocking socket reads
     loop = asyncio.get_running_loop()
@@ -468,7 +486,7 @@ async def handle_queue():
             full_message, ssid, channel = parts[0], parts[1], int(parts[2])
             #seen_messages[f"{full_message}:{ssid}"] = time.time()  # Update seen messages to prevent immediate rebroadcast
             print(f"Queue processing: Broadcasting message '{full_message}' on SSID '{ssid}' and channel {channel}")
-            await broadcast_message(INTERFACE, message_prefix, channel, beacon_interval, uptime=beacon_uptime, custom_message=full_message, network=ssid[len(ssid_prefix):] if ssid.startswith(ssid_prefix) else ssid)
+            await broadcast_message(PRIMARY_INTERFACE, message_prefix, channel, beacon_interval, uptime=beacon_uptime, custom_message=full_message, network=ssid[len(ssid_prefix):] if ssid.startswith(ssid_prefix) else ssid)
         else:
             print(f"Invalid message format: {message}")
         
@@ -498,7 +516,7 @@ async def handle_new_message(reader, writer):
     decay_time = networks.get(ssid, {}).get("decay_time", decay_time)
     channel = networks.get(ssid, {}).get("channel", channel)
     # Add to seen messages with decay time
-    seen_messages[f"{custom_message}:{ssid}"] = time.time() + decay_time
+    seen_messages[f"{custom_message}:{ssid}"] = time.time()
     # Add to message queue for processing with detailed message format
     asyncio.create_task(message_queue.put(f"{custom_message}:{ssid}:{channel}"))
     response = "Message received and will be broadcast.".encode('utf-8')
@@ -589,7 +607,8 @@ async def broadcast_message(interface, message_prefix, channel, interval, uptime
     end_time = None
     if uptime > 0:
         end_time = next_send + uptime
-        print(f"Started sending beacons at {time.ctime()}, will stop after {uptime} seconds at {time.ctime(end_time)}")
+        stop_at = time.time() + uptime
+        print(f"Started sending beacons at {time.ctime()}, will stop after {uptime} seconds at {time.ctime(stop_at)}")
     try:
         while True:
             # Check for uptime expiration
@@ -605,6 +624,11 @@ async def broadcast_message(interface, message_prefix, channel, interval, uptime
                     # send may raise BlockingIOError if kernel buffer is full
                     sock.send(mv)
                 except (BlockingIOError, InterruptedError):
+                    print("[ERROR] BlockingIOError or InterruptedError")
+                    pass
+                except Exception as e:
+                    print(f"[ERROR] Broadcast failed: {e!r}")
+                    #raise
                     pass
                 # schedule next send
                 next_send += interval
@@ -669,22 +693,13 @@ async def main():
     #print(f"[DEBUG] Configured INTERFACE: {INTERFACE}")
     #print(f"[DEBUG] Available interfaces: {available_ifaces}")
 
-    # Socket setup - use ETH_P_ALL (0x0003) to receive all packets on the interface
-    try:
-        proto = socket.ntohs(0x0003)
-        sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, proto)
+    socks = []
+    for interface in INTERFACES:
         try:
-            sock.bind((INTERFACE, 0))
+            socks.append(open_receiver(interface, available_ifaces))
         except Exception as e:
-            print(f"[ERROR] Failed to bind raw socket to interface '{INTERFACE}': {e}")
-            if available_ifaces:
-                print(f"[ERROR] '{INTERFACE}' not in available interfaces. Choose one of: {available_ifaces}")
-            raise
-        sock.setblocking(0)
-        #print(f"[DEBUG] Raw socket created (AF_PACKET, SOCK_RAW, proto=0x0003) and bound to {INTERFACE}")
-    except Exception as e:
-        print(f"[ERROR] Socket setup failed: {e}")
-        return
+            print(f"[ERROR] Socket setup failed: {e}")
+            return
 
     # Start server to listen for new messages to send
     task1 = asyncio.create_task(listen_for_new_messages(8999))
@@ -692,8 +707,11 @@ async def main():
     task2 = asyncio.create_task(handle_queue())
     # Start receiving messages (runs forever)
     
-    print("P2P Pager system started. Listening for messages...")
-    await receive_messages(sock, decay_time, message_prefix, decay_prefix)
+    print("P2P Pager system started. Staring listeners...")
+    for sock in socks:
+        asyncio.create_task(receive_messages(sock, decay_time, message_prefix, decay_prefix))
+
+    await asyncio.gather(task1, task2)
 
 
 if __name__ == '__main__':
